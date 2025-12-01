@@ -8,32 +8,13 @@ import {
   ResponsiveContainer 
 } from 'recharts';
 import { BookOpen, AlertCircle, CheckCircle2, FileText, PenTool, Sparkles, Loader2, Send, ChevronUp, ChevronDown, Wand2, History as HistoryIcon, RefreshCw, Trash2 } from 'lucide-react';
-import { GoogleGenAI, Type } from "@google/genai";
 import { TASK_TYPES, SCALES } from './constants';
 import { AssessmentCard } from './components/AssessmentCard';
 import { InfoTooltip } from './components/InfoTooltip';
 import { ExamTimer } from './components/ExamTimer';
 import { HistoryList } from './components/HistoryList';
 import { ScoreState, TaskType, GeneratedTask, AssessmentFeedback, ImprovedResponse, HistoryEntry } from './types';
-
-// Authentic C1 Advanced topics
-const C1_TOPICS = [
-  "Urban Traffic and Transport Policies",
-  "Funding for Local Facilities (Sports vs Arts)",
-  "School Curriculum Changes",
-  "Work-Life Balance and Remote Working",
-  "Environmental Responsibility in Towns",
-  "Youth Unemployment Solutions",
-  "Preserving Local History vs Modernisation",
-  "The Role of Museums and Libraries",
-  "Healthy Eating Initiatives",
-  "University Funding and Tuition",
-  "Public Transport Improvements",
-  "Supporting Local Businesses",
-  "Technology in Classrooms",
-  "Sports Facilities in Towns",
-  "Charity and Community Service"
-];
+import { generateTask, improveWriting, assessWriting } from './gemini';
 
 function App() {
   // --- THEME LOGIC ---
@@ -169,69 +150,14 @@ function App() {
     setImprovedResponse(null);
     setActiveTab('draft');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const randomTopic = C1_TOPICS[Math.floor(Math.random() * C1_TOPICS.length)];
-
-      let prompt = '';
-      let schemaProperties: any = {
-        context: { type: Type.STRING },
-        question: { type: Type.STRING },
-        points: { type: Type.ARRAY, items: { type: Type.STRING } },
-        instructions: { type: Type.STRING }
-      };
-      let requiredFields = ["context", "question", "points", "instructions"];
-
-      if (taskType === 'Essay') {
-        prompt = `Generate a Cambridge C1 Advanced (CAE) Writing Part 1 Essay task about: "${randomTopic}".
-        Structure:
-        1. Context: Brief scene setting.
-        2. Question: Practical policy/decision question.
-        3. Points: Exactly 3 noun phrases.
-        4. Opinions: Exactly 3 mixed opinions corresponding to points.
-        5. Instructions: Standard C1 essay instruction.
-        Keep it realistic.`;
-        schemaProperties.opinions = { type: Type.ARRAY, items: { type: Type.STRING } };
-        requiredFields.push("opinions");
-      } else if (taskType === 'Report') {
-        prompt = `Generate a Cambridge C1 Advanced (CAE) Writing Part 2 Report task about: "${randomTopic}".
-        Structure:
-        1. Context: Professional/academic situation defining role and reader.
-        2. Question: Instruction on who to write to.
-        3. Points: 2-3 specific content requirements.
-        4. Instructions: "Write your report."
-        Tone: Formal.`;
-      }
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: schemaProperties,
-            required: requiredFields
-          }
-        }
-      });
-
-      const jsonText = response.text;
-      if (jsonText) {
-        const baseTask = JSON.parse(jsonText);
-        const newTask: GeneratedTask = {
-          ...baseTask,
-          id: crypto.randomUUID(),
-          timestamp: Date.now(),
-          type: taskType
-        };
-        
+      const newTask = await generateTask(taskType);
+      
+      if (newTask) {
         setGeneratedTask(newTask);
-        
         setTaskHistory(prev => {
           const updated = [newTask, ...prev];
           return updated.slice(0, 5);
         });
-        
         setStudentText(''); 
       }
     } catch (error) {
@@ -270,49 +196,19 @@ function App() {
     if (!studentText.trim()) { alert("Please enter text."); return; }
     setIsImproving(true);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const taskContext = generatedTask ? JSON.stringify(generatedTask) : `Generic ${taskType}`;
+      const result = await improveWriting(studentText, taskContext);
       
-      const prompt = `Act as a Cambridge English Editor. Rewrite this C1 Advanced student text to Band 5 standard.
-      
-      Rules: 
-      1. RETAIN arguments/intent. 
-      2. Upgrade vocab/grammar. 
-      3. Enhance cohesion. 
-      4. FIX all errors.
-      
-      Context: ${taskContext}
-      Student Text: "${studentText}"
-      
-      Output JSON: { 
-        "rewrittenText": "The full polished text...", 
-        "keyChanges": [
-           "List specific GRAMMAR/SPELLING ERRORS fixed (Format: 'Correction: [original] -> [fixed]')",
-           "List specific VOCABULARY UPGRADES (Format: 'Upgrade: [original] -> [advanced]')",
-           "List Structural Improvements"
-        ] 
-      }`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: { 
-          responseMimeType: 'application/json', 
-          responseSchema: { 
-            type: Type.OBJECT, 
-            properties: { 
-              rewrittenText: { type: Type.STRING }, 
-              keyChanges: { type: Type.ARRAY, items: { type: Type.STRING } } 
-            },
-            required: ["rewrittenText", "keyChanges"]
-          } 
-        }
-      });
-
-      const result = JSON.parse(response.text);
-      if (result) { setImprovedResponse(result); setActiveTab('improved'); }
-    } catch (e) { console.error(e); alert("Improvement failed."); }
-    finally { setIsImproving(false); }
+      if (result) { 
+        setImprovedResponse(result); 
+        setActiveTab('improved'); 
+      }
+    } catch (e) { 
+      console.error(e); 
+      alert("Improvement failed."); 
+    } finally { 
+      setIsImproving(false); 
+    }
   };
 
   const handleAssessWriting = async () => {
@@ -320,42 +216,32 @@ function App() {
     setIsAssessing(true);
     setIsScoreCollapsed(false); 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const taskContext = generatedTask ? JSON.stringify(generatedTask) : `Generic ${taskType}`;
-      const prompt = `Act as a Cambridge Examiner (CAE). Assess this text.
-      Task: ${taskContext}
-      Text: "${studentText}"
-      Rubric: Content, Communicative Achievement, Organisation, Language.
-      Output JSON: { scores: {content, communicative, organisation, language}, feedback: {content: {summary, strengths, weaknesses}, ... for all 4, plus general string} }`;
+      const result = await assessWriting(studentText, taskContext);
 
-      const detailSchema = { type: Type.OBJECT, properties: { summary: { type: Type.STRING }, strengths: { type: Type.ARRAY, items: { type: Type.STRING } }, weaknesses: { type: Type.ARRAY, items: { type: Type.STRING } } }, required: ["summary", "strengths", "weaknesses"] };
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              scores: { type: Type.OBJECT, properties: { content: { type: Type.INTEGER }, communicative: { type: Type.INTEGER }, organisation: { type: Type.INTEGER }, language: { type: Type.INTEGER } } },
-              feedback: { type: Type.OBJECT, properties: { content: detailSchema, communicative: detailSchema, organisation: detailSchema, language: detailSchema, general: { type: Type.STRING } } }
-            }
-          }
-        }
-      });
-
-      const result = JSON.parse(response.text);
       if (result) {
         setScores(result.scores);
         setFeedback(result.feedback);
         setHistory(prev => {
-          const entry: HistoryEntry = { id: Date.now(), timestamp: new Date(), taskType, generatedTask, studentText, scores: result.scores, feedback: result.feedback, wordCount };
+          const entry: HistoryEntry = { 
+            id: Date.now(), 
+            timestamp: new Date(), 
+            taskType, 
+            generatedTask, 
+            studentText, 
+            scores: result.scores, 
+            feedback: result.feedback, 
+            wordCount 
+          };
           return [entry, ...prev].slice(0, 3);
         });
       }
-    } catch (e) { console.error(e); alert("Assessment failed."); }
-    finally { setIsAssessing(false); }
+    } catch (e) { 
+      console.error(e); 
+      alert("Assessment failed."); 
+    } finally { 
+      setIsAssessing(false); 
+    }
   };
 
   const currentTaskInfo = TASK_TYPES.find(t => t.id === taskType);
