@@ -19,8 +19,7 @@ const C1_TOPICS = [
   "Charity and Community Service"
 ];
 
-// Initialize the GoogleGenAI with the API key from environment variables
-const getClient = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getClient = () => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 /**
  * Generates a new Cambridge C1 Advanced Task (Essay or Report)
